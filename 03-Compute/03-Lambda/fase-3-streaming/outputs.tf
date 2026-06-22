@@ -1,0 +1,14 @@
+output "api_url" {
+  description = "Endpoint do API Gateway da Fase 3. O aluno faz POST em {api_url}/pedidos."
+  value       = aws_apigatewayv2_api.api.api_endpoint
+}
+
+output "stream_name" {
+  description = "Nome do Kinesis Data Stream de pedidos."
+  value       = aws_kinesis_stream.pedidos.name
+}
+
+output "dashboard_url" {
+  description = "Link direto do dashboard de observabilidade da Fase 3."
+  value       = "https://us-east-1.console.aws.amazon.com/cloudwatch/home?region=us-east-1#dashboards/dashboard/${aws_cloudwatch_dashboard.fase3.dashboard_name}"
+}

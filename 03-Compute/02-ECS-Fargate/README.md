@@ -417,7 +417,7 @@ Os dois aprendizados centrais para levar:
 
 ## Próximo passo
 
-Este é o último laboratório do módulo de Compute. Com EFS (storage), x86 vs Graviton e ECS+Fargate na bagagem, você já tem as peças de storage e compute para montar arquiteturas completas combinando storage, compute e networking — com ECS Fargate como peça de compute em várias delas.
+Siga para o [Lab 03.3 - Serverless: Lambda orientada a eventos](../03-Lambda/README.md). Depois de VM (EC2) e container (Fargate), você fecha o módulo de Compute com o modelo **serverless**, construindo uma pipeline de ingestão de dados orientada a eventos que evolui de Lambda+S3 para SQS e depois Kinesis.
 
 ---
 
