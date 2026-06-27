@@ -25,6 +25,7 @@ Repositório de laboratórios práticos da disciplina. Cada lab é um passo a pa
 | 02.1 | [Storage — Network File System (EFS)](./02-Storage/01-Network-file-system/README.md) | Provisiona EFS + EC2 e mede IOPS, block size e paralelismo sob carga. | ~60 min |
 | 03.1 | [Compute — x86 vs Graviton](./03-Compute/01-X86-Graviton/README.md) | Sobe duas EC2 (Intel e Graviton) e roda benchmarks lado a lado. | ~50 min |
 | 03.2 | [Compute — Containers com ECS + Fargate](./03-Compute/02-ECS-Fargate/README.md) | Build/push de imagem no ECR e deploy de container no Fargate. | ~45 min |
+| 03.3 | [Compute — Serverless: Lambda orientada a eventos](./03-Compute/03-Lambda/README.md) | Pipeline de ingestão de dados em 3 fases (Lambda+S3 → SQS → Kinesis) com observabilidade. | ~50-60 min |
 
 > [!NOTE]
 > Os tempos acima são de execução pura. Some o tempo de leitura, observação dos resultados e reflexão — na prática, um lab leva de 2 a 4 vezes o tempo listado.
