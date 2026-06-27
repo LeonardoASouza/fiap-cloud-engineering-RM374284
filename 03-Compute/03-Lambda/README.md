@@ -43,7 +43,7 @@ Três arquiteturas de ingestão funcionando e comparadas com dados reais, e a in
 | 4 | [Fase 3 — Três times, um dado (Kinesis + Firehose + Athena)](#parte-4---fase-3-três-times-um-dado) | 5.000 pedidos. Firehose → Parquet → Athena (CLI e console), e faturamento em tempo real. Depois destrua. | [15](#passo-15) · [16](#passo-16) · [17](#passo-17) · [18](#passo-18) · [19](#passo-19) · [20](#passo-20) · [21](#passo-21) · [22](#passo-22) | ~25 min |
 | 5 | [Conclusão e decisão](#parte-5---conclusão-e-decisão) | Tabela comparativa e o documento de decisão. | [23](#passo-23) | ~5 min |
 
-> Os passos 3, 10, 16 e 20 têm sub-passos (3.1/3.2 etc.) — clique no número para ir à parte. Os passos 8, 14 e 22 são o `terraform destroy` de cada fase: **não pule**.
+> Os passos 3, 10, 16, 20 e 21 têm sub-passos (3.1/3.2 etc.) — clique no número para ir à parte. Os passos 8, 14 e 22 são o `terraform destroy` de cada fase: **não pule**.
 
 > Se travou em algum passo, clique no número no mapa acima para ir direto a ele.
 
@@ -633,17 +633,40 @@ O resultado é o mesmo da tabela do passo 19 — mas agora você o vê no editor
 ![](img/f3-athena-query.png)
 
 <a id="passo-21"></a>
-**21.** Pegue o link do dashboard `PedeJa-Fase3-Streaming` e abra no navegador:
+**21.** A Fase 3 tem **dois dashboards**, com públicos diferentes: um de **negócio** (responde a pergunta da Marina) e um de **golden signals** (para quem opera a pipeline).
+
+**21.1.** Abra o **painel de negócio** — ele responde a pergunta-âncora do lab (*"qual foi o faturamento por cidade?"*) com números grandes, pizza de participação e barras por cidade:
 
 ```bash
-terraform -chdir=/workspaces/fiap-cloud-engineering/03-Compute/03-Lambda/fase-3-streaming output -raw dashboard_url && echo
+terraform -chdir=/workspaces/fiap-cloud-engineering/03-Compute/03-Lambda/fase-3-streaming output -raw dashboard_negocio_url && echo
 ```
 
-Abra a URL impressa — ou vá direto pelo link **[CloudWatch → Dashboards → PedeJa-Fase3-Streaming](https://us-east-1.console.aws.amazon.com/cloudwatch/home?region=us-east-1#dashboards/dashboard/PedeJa-Fase3-Streaming)**. Você vê **publicados (5000) vs entregue ao S3 em Parquet (Firehose)** convergindo, e o **data freshness** do Firehose (quantos segundos o dado levou para chegar ao S3 — perto de 60s).
+Abra a URL impressa — ou vá direto: **[CloudWatch → Dashboards → PedeJa-Fase3-Negocio](https://us-east-1.console.aws.amazon.com/cloudwatch/home?region=us-east-1#dashboards/dashboard/PedeJa-Fase3-Negocio)**. No seletor de período (canto superior direito), escolha **últimos 30 min** para cobrir sua carga. Você vê o **faturamento total**, os **pedidos processados** e o **ranking por cidade** — São Paulo na frente, como no Athena. É a mesma resposta do passo 19/20, agora na linguagem do negócio.
 
-<!-- PRINT SUGERIDO: img/f3-dashboard.png
-     Dashboard PedeJa-Fase3-Streaming: publicados vs entregue em Parquet, data freshness do Firehose e faturamento por cidade. -->
-![](img/f3-dashboard.png)
+<!-- PRINT SUGERIDO: img/f3-dash-negocio.png
+     Dashboard PedeJa-Fase3-Negocio: numeros grandes de faturamento total e pedidos, pizza de participacao por cidade e barras de faturamento por cidade (Sao Paulo no topo). -->
+![](img/f3-dash-negocio.png)
+
+**21.2.** Abra o **painel de golden signals** — a visão de operação (SRE): **Latência**, **Tráfego**, **Erros** e **Saturação** do produtor, do Firehose e do consumidor de faturamento:
+
+```bash
+terraform -chdir=/workspaces/fiap-cloud-engineering/03-Compute/03-Lambda/fase-3-streaming output -raw dashboard_golden_url && echo
+```
+
+Abra a URL impressa — ou vá direto: **[CloudWatch → Dashboards → PedeJa-Fase3-GoldenSignals](https://us-east-1.console.aws.amazon.com/cloudwatch/home?region=us-east-1#dashboards/dashboard/PedeJa-Fase3-GoldenSignals)**. Repare no **data freshness** do Firehose (~60s, o buffer), nos **erros zerados** e na **saturação baixa** — a pipeline está saudável mesmo com os 5.000 pedidos.
+
+<!-- PRINT SUGERIDO: img/f3-dash-golden.png
+     Dashboard PedeJa-Fase3-GoldenSignals: 4 quadrantes (latencia, trafego, erros, saturacao) da pipeline. -->
+![](img/f3-dash-golden.png)
+
+<details>
+<summary><b>💡 Clique para entender — por que dois dashboards?</b></summary>
+<blockquote>
+
+São **públicos diferentes** olhando o mesmo sistema. O **painel de negócio** responde "quanto faturamos e onde?" — é o que a Marina leva para a diretoria; fala em reais e cidades. O **painel de golden signals** responde "o sistema está saudável?" — é o que o time de plantão observa; fala em latência, erros e saturação. Misturar os dois num só confunde os dois públicos. Separá-los é boa prática: cada audiência tem o painel que fala a sua língua.
+
+</blockquote>
+</details>
 
 <a id="passo-22"></a>
 **22.** Destrua a Fase 3:

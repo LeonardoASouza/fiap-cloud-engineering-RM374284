@@ -13,9 +13,14 @@ output "bucket_datalake" {
   value       = aws_s3_bucket.datalake.bucket
 }
 
-output "dashboard_url" {
-  description = "Link direto do dashboard de observabilidade da Fase 3."
-  value       = "https://us-east-1.console.aws.amazon.com/cloudwatch/home?region=us-east-1#dashboards/dashboard/${aws_cloudwatch_dashboard.fase3.dashboard_name}"
+output "dashboard_negocio_url" {
+  description = "Painel de negocio: faturamento por cidade (responde a pergunta do lab)."
+  value       = "https://us-east-1.console.aws.amazon.com/cloudwatch/home?region=us-east-1#dashboards/dashboard/${aws_cloudwatch_dashboard.negocio.dashboard_name}"
+}
+
+output "dashboard_golden_url" {
+  description = "Painel de golden signals: latencia, trafego, erros, saturacao."
+  value       = "https://us-east-1.console.aws.amazon.com/cloudwatch/home?region=us-east-1#dashboards/dashboard/${aws_cloudwatch_dashboard.golden.dashboard_name}"
 }
 
 output "glue_database" {

@@ -249,49 +249,139 @@ resource "aws_lambda_permission" "apigw" {
 }
 
 # ---------------------------------------------------------------------------
-# Dashboard Fase 3: o mesmo stream alimentando 2 consumidores + negocio
+# Dashboard 1 - NEGOCIO: responde a pergunta-ancora do lab
+# "Qual foi o faturamento por cidade da PedeJa?" Visao de stakeholder (Marina).
 # ---------------------------------------------------------------------------
-resource "aws_cloudwatch_dashboard" "fase3" {
-  dashboard_name = "PedeJa-Fase3-Streaming"
+resource "aws_cloudwatch_dashboard" "negocio" {
+  dashboard_name = "PedeJa-Fase3-Negocio"
   dashboard_body = jsonencode({
     widgets = [
       {
-        type       = "text", x = 0, y = 0, width = 24, height = 2,
-        properties = { markdown = "# PedeJa - Fase 3 (Kinesis: 1 stream -> N consumidores)\nO **mesmo** stream alimenta dois consumidores: o **Firehose** (converte em Parquet -> S3, lido pelo Athena) e a **Lambda de faturamento** (metrica em tempo real). O dado fica retido -> permite **replay**. Isso a fila SQS nao faz." }
+        type       = "text", x = 0, y = 0, width = 24, height = 3,
+        properties = { markdown = "# PedeJa - Painel de Negocio (faturamento por cidade)\n**Pergunta:** qual foi o faturamento por cidade da PedeJa? Este painel responde em tempo (quase) real, conforme os pedidos entram no stream. E o que a Marina (lider de Dados) ve.\n\n> Numeros agregados pela Lambda de faturamento via metricas EMF. Selecione um periodo que cubra a sua carga (ex: ultimos 30 min)." }
       },
+      # Numeros grandes (single value): faturamento total e pedidos no periodo
       {
-        type = "metric", x = 0, y = 2, width = 12, height = 6,
+        type = "metric", x = 0, y = 3, width = 8, height = 6,
         properties = {
-          title  = "Trafego - publicados (stream) vs entregue em Parquet (Firehose)",
+          title  = "Faturamento total (R$)",
           region = "us-east-1",
+          view   = "singleValue",
+          stat   = "Sum",
           metrics = [
-            ["PedeJa", "pedidos_publicados", "service", "pedeja-produtor-stream", { stat = "Sum", label = "publicados (5000)" }],
-            ["AWS/Firehose", "DeliveryToS3.Records", "DeliveryStreamName", aws_kinesis_firehose_delivery_stream.datalake.name, { stat = "Sum", label = "entregue ao S3 (Parquet)" }]
+            ["PedeJa", "faturamento_tempo_real", "service", "pedeja-faturamento", "cidade", "Sao Paulo", { visible = false }],
+            ["...", "cidade", "Rio de Janeiro", { visible = false }],
+            ["...", "cidade", "Curitiba", { visible = false }],
+            ["...", "cidade", "Belo Horizonte", { visible = false }],
+            [{ expression = "m1+m2+m3+m4", label = "Faturamento total (R$)", id = "e1" }]
           ]
         }
       },
       {
-        type = "metric", x = 12, y = 2, width = 12, height = 6,
+        type = "metric", x = 8, y = 3, width = 8, height = 6,
         properties = {
-          title  = "Firehose - idade do dado no buffer (s) e faturamento (Lambda)",
+          title   = "Pedidos processados",
+          region  = "us-east-1",
+          view    = "singleValue",
+          stat    = "Sum",
+          metrics = [["PedeJa", "pedidos_agregados", "service", "pedeja-faturamento", { label = "pedidos (lotes agregados)" }]]
+        }
+      },
+      # Pizza: participacao de cada cidade no faturamento
+      {
+        type = "metric", x = 16, y = 3, width = 8, height = 6,
+        properties = {
+          title  = "Participacao no faturamento (%)",
           region = "us-east-1",
+          view   = "pie",
+          stat   = "Sum",
           metrics = [
-            ["AWS/Firehose", "DeliveryToS3.DataFreshness", "DeliveryStreamName", aws_kinesis_firehose_delivery_stream.datalake.name, { stat = "Maximum", label = "data freshness (s)" }],
-            ["AWS/Lambda", "Duration", "FunctionName", aws_lambda_function.faturamento.function_name, { stat = "Average", label = "faturamento (ms)" }]
+            ["PedeJa", "faturamento_tempo_real", "service", "pedeja-faturamento", "cidade", "Sao Paulo", { label = "Sao Paulo" }],
+            ["...", "cidade", "Rio de Janeiro", { label = "Rio de Janeiro" }],
+            ["...", "cidade", "Curitiba", { label = "Curitiba" }],
+            ["...", "cidade", "Belo Horizonte", { label = "Belo Horizonte" }]
           ]
         }
       },
+      # Barras: faturamento por cidade (ranking, responde a pergunta direto)
       {
-        type = "metric", x = 0, y = 8, width = 24, height = 6,
+        type = "metric", x = 0, y = 9, width = 24, height = 7,
         properties = {
-          title  = "Negocio - faturamento em tempo real por cidade",
+          title  = "Faturamento por cidade (R$)",
           region = "us-east-1",
-          view   = "timeSeries",
+          view   = "bar",
+          stat   = "Sum",
           metrics = [
-            ["PedeJa", "faturamento_tempo_real", "service", "pedeja-faturamento", "cidade", "Sao Paulo", { stat = "Sum" }],
-            ["...", "cidade", "Rio de Janeiro", { stat = "Sum" }],
-            ["...", "cidade", "Curitiba", { stat = "Sum" }],
-            ["...", "cidade", "Belo Horizonte", { stat = "Sum" }]
+            ["PedeJa", "faturamento_tempo_real", "service", "pedeja-faturamento", "cidade", "Sao Paulo", { label = "Sao Paulo" }],
+            ["...", "cidade", "Rio de Janeiro", { label = "Rio de Janeiro" }],
+            ["...", "cidade", "Curitiba", { label = "Curitiba" }],
+            ["...", "cidade", "Belo Horizonte", { label = "Belo Horizonte" }]
+          ]
+        }
+      }
+    ]
+  })
+}
+
+# ---------------------------------------------------------------------------
+# Dashboard 2 - GOLDEN SIGNALS: saude da pipeline (Latencia, Trafego, Erros,
+# Saturacao) cobrindo produtor, Firehose e consumidor de faturamento.
+# ---------------------------------------------------------------------------
+resource "aws_cloudwatch_dashboard" "golden" {
+  dashboard_name = "PedeJa-Fase3-GoldenSignals"
+  dashboard_body = jsonencode({
+    widgets = [
+      {
+        type       = "text", x = 0, y = 0, width = 24, height = 3,
+        properties = { markdown = "# PedeJa - Golden Signals (Fase 3)\nOs **4 sinais de ouro** (SRE) da pipeline de streaming: **Latencia**, **Trafego**, **Erros** e **Saturacao**. E a visao de quem opera o sistema, complementar ao painel de negocio." }
+      },
+      # LATENCIA
+      {
+        type = "metric", x = 0, y = 3, width = 12, height = 6,
+        properties = {
+          title  = "1. Latencia - duracao das Lambdas e frescor do Firehose",
+          region = "us-east-1",
+          metrics = [
+            ["AWS/Lambda", "Duration", "FunctionName", aws_lambda_function.produtor.function_name, { stat = "Average", label = "produtor (ms)" }],
+            ["...", aws_lambda_function.faturamento.function_name, { stat = "Average", label = "faturamento (ms)" }],
+            ["AWS/Firehose", "DeliveryToS3.DataFreshness", "DeliveryStreamName", aws_kinesis_firehose_delivery_stream.datalake.name, { stat = "Maximum", label = "Firehose data freshness (s)", yAxis = "right" }]
+          ]
+        }
+      },
+      # TRAFEGO
+      {
+        type = "metric", x = 12, y = 3, width = 12, height = 6,
+        properties = {
+          title  = "2. Trafego - invocacoes e registros entregues",
+          region = "us-east-1",
+          metrics = [
+            ["AWS/Lambda", "Invocations", "FunctionName", aws_lambda_function.produtor.function_name, { stat = "Sum", label = "produtor (invocacoes)" }],
+            ["AWS/Firehose", "DeliveryToS3.Records", "DeliveryStreamName", aws_kinesis_firehose_delivery_stream.datalake.name, { stat = "Sum", label = "Firehose -> S3 (registros)" }]
+          ]
+        }
+      },
+      # ERROS
+      {
+        type = "metric", x = 0, y = 9, width = 12, height = 6,
+        properties = {
+          title  = "3. Erros - falhas nas Lambdas (esperado: 0)",
+          region = "us-east-1",
+          metrics = [
+            ["AWS/Lambda", "Errors", "FunctionName", aws_lambda_function.produtor.function_name, { stat = "Sum", label = "produtor" }],
+            ["...", aws_lambda_function.faturamento.function_name, { stat = "Sum", label = "faturamento" }]
+          ]
+        }
+      },
+      # SATURACAO
+      {
+        type = "metric", x = 12, y = 9, width = 12, height = 6,
+        properties = {
+          title  = "4. Saturacao - concorrencia e throttling das Lambdas",
+          region = "us-east-1",
+          metrics = [
+            ["AWS/Lambda", "ConcurrentExecutions", "FunctionName", aws_lambda_function.produtor.function_name, { stat = "Maximum", label = "produtor (concorrencia)" }],
+            ["AWS/Lambda", "Throttles", "FunctionName", aws_lambda_function.produtor.function_name, { stat = "Sum", label = "produtor (throttles)" }],
+            ["...", aws_lambda_function.faturamento.function_name, { stat = "Sum", label = "faturamento (throttles)" }]
           ]
         }
       }
