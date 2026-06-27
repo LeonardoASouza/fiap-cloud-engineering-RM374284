@@ -556,6 +556,8 @@ python3 dados/publicar_5000.py "$API"
 
 Uma barra de progresso mostra o avanço em tempo real (`[########....] 60% 3000/5000 pedidos (ok: 3000, ...)`). Saída final (leva ~1-2 min): `Concluido: 5000/5000 pedidos publicados em Ns`.
 
+![](img/f3-script-5000.png)
+
 <details>
 <summary><b>⚠ Se der erro: alguns pedidos falharam (ex.: <code>4998/5000</code>)</b></summary>
 <blockquote>
@@ -597,8 +599,6 @@ Saída esperada (o faturamento é 500× o da Parte 1):
 | Belo Horizonte | 1000 | 36500.0 |
 | **Total** | **5000** | **298350.0** |
 
-<!-- PRINT SUGERIDO: img/f3-athena.png
-     Resultado da query no Athena: 4 cidades com 5000 pedidos no total e faturamento 500x. Pode ser no console do Athena (mais visual) ou no terminal. -->
 ![](img/f3-athena.png)
 
 <details>
@@ -613,8 +613,6 @@ O Firehose ainda não fechou o buffer (60s). Espere mais ~30s e rode a query de 
 
 **20.1.** Abra o **[Athena Query Editor](https://us-east-1.console.aws.amazon.com/athena/home?region=us-east-1#/query-editor)**. No seletor de **Workgroup** (canto superior direito), escolha **`pedeja`** — ele já vem com o local de resultados configurado, então **não** aparece o aviso de "configure um output location".
 
-<!-- PRINT SUGERIDO: img/f3-athena-workgroup.png
-     Topo do Athena Query Editor com o seletor de Workgroup aberto e "pedeja" selecionado. -->
 ![](img/f3-athena-workgroup.png)
 
 **20.2.** No painel esquerdo, em **Database**, selecione **`pedeja`**. A tabela **`pedidos`** aparece na lista — clique nos três pontos ao lado dela e em **Preview Table** para ver as 10 primeiras linhas (o Athena lê direto o Parquet que o Firehose gravou).
@@ -630,8 +628,7 @@ ORDER BY faturamento DESC;
 
 O resultado é o mesmo da tabela do passo 19 — mas agora você o vê no editor visual, com o **tempo de execução** e os **dados escaneados** que o Athena reporta abaixo da query. Esse é o ponto de chegada: **um time de BI consulta os pedidos da PedeJá em SQL, segundos após eles entrarem no stream**.
 
-<!-- PRINT SUGERIDO: img/f3-athena-query.png
-     Athena Query Editor com a query rodada e a tabela de resultado (4 cidades, faturamento por cidade) + o "Run time" e "Data scanned" abaixo. -->
+
 ![](img/f3-athena-query.png)
 
 <a id="passo-21"></a>
@@ -647,7 +644,6 @@ Abra a URL impressa — ou vá direto: **[CloudWatch → Dashboards → PedeJa-F
 
 <!-- PRINT SUGERIDO: img/f3-dash-negocio.png
      Dashboard PedeJa-Fase3-Negocio: numeros grandes de faturamento total e pedidos, pizza de participacao por cidade e barras de faturamento por cidade (Sao Paulo no topo). -->
-![](img/f3-dash-negocio.png)
 
 **21.2.** Abra o **painel de golden signals** — a visão de operação (SRE): **Latência**, **Tráfego**, **Erros** e **Saturação** do produtor, do Firehose e do consumidor de faturamento:
 
@@ -659,7 +655,6 @@ Abra a URL impressa — ou vá direto: **[CloudWatch → Dashboards → PedeJa-F
 
 <!-- PRINT SUGERIDO: img/f3-dash-golden.png
      Dashboard PedeJa-Fase3-GoldenSignals: 4 quadrantes (latencia, trafego, erros, saturacao) da pipeline. -->
-![](img/f3-dash-golden.png)
 
 <details>
 <summary><b>💡 Clique para entender — por que dois dashboards?</b></summary>
