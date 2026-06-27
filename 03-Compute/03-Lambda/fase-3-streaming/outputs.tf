@@ -17,3 +17,13 @@ output "dashboard_url" {
   description = "Link direto do dashboard de observabilidade da Fase 3."
   value       = "https://us-east-1.console.aws.amazon.com/cloudwatch/home?region=us-east-1#dashboards/dashboard/${aws_cloudwatch_dashboard.fase3.dashboard_name}"
 }
+
+output "glue_database" {
+  description = "Database Glue que o Athena consulta."
+  value       = aws_glue_catalog_database.pedeja.name
+}
+
+output "athena_results" {
+  description = "Prefixo S3 onde o Athena grava os resultados das queries."
+  value       = "s3://${aws_s3_bucket.datalake.bucket}/athena-results/"
+}

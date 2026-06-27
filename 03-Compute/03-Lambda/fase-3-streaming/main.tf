@@ -55,31 +55,100 @@ resource "aws_lambda_function" "produtor" {
 }
 
 # ---------------------------------------------------------------------------
-# Consumidor 1: data lake (grava no S3)
+# Consumidor 1: Kinesis FIREHOSE -> converte para PARQUET -> S3 (Near Real Time)
+# Em vez de uma Lambda gravando arquivo por evento (anti-padrao small-files),
+# o Firehose acumula um micro-lote (60s ou 64 MB), converte para Parquet usando
+# o schema da tabela Glue, e grava 1 arquivo colunar pronto para o Athena.
 # ---------------------------------------------------------------------------
-data "archive_file" "datalake_zip" {
-  type        = "zip"
-  source_dir  = "${path.module}/lambda-datalake"
-  output_path = "${path.module}/build/datalake.zip"
+
+# Catalogo: database + tabela que descrevem o schema dos pedidos. O Firehose usa
+# essa tabela para saber como converter o JSON em Parquet; o Athena usa para ler.
+resource "aws_glue_catalog_database" "pedeja" {
+  name = "pedeja"
 }
 
-resource "aws_lambda_function" "datalake" {
-  function_name    = "pedeja-datalake"
-  role             = local.lab_role_arn
-  runtime          = "python3.12"
-  handler          = "handler.handler"
-  filename         = data.archive_file.datalake_zip.output_path
-  source_code_hash = data.archive_file.datalake_zip.output_base64sha256
-  timeout          = 60
-  memory_size      = 128
-  layers           = [local.powertools_layer]
-  tracing_config { mode = "Active" }
-  environment {
-    variables = {
-      BUCKET_DATA_LAKE             = aws_s3_bucket.datalake.bucket
-      POWERTOOLS_SERVICE_NAME      = "pedeja-datalake"
-      POWERTOOLS_METRICS_NAMESPACE = "PedeJa"
-      POWERTOOLS_LOG_LEVEL         = "INFO"
+resource "aws_glue_catalog_table" "pedidos" {
+  name          = "pedidos"
+  database_name = aws_glue_catalog_database.pedeja.name
+  table_type    = "EXTERNAL_TABLE"
+  parameters    = { classification = "parquet" }
+
+  storage_descriptor {
+    location      = "s3://${aws_s3_bucket.datalake.bucket}/pedidos/"
+    input_format  = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat"
+    output_format = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat"
+    ser_de_info {
+      serialization_library = "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe"
+    }
+    columns {
+      name = "pedido_id"
+      type = "string"
+    }
+    columns {
+      name = "cliente"
+      type = "string"
+    }
+    columns {
+      name = "restaurante"
+      type = "string"
+    }
+    columns {
+      name = "item"
+      type = "string"
+    }
+    columns {
+      name = "valor"
+      type = "double"
+    }
+    columns {
+      name = "cidade"
+      type = "string"
+    }
+    columns {
+      name = "event_time"
+      type = "string"
+    }
+  }
+}
+
+# Firehose le do Kinesis Data Stream e entrega Parquet no S3.
+resource "aws_kinesis_firehose_delivery_stream" "datalake" {
+  name        = "pedeja-firehose-datalake"
+  destination = "extended_s3"
+
+  kinesis_source_configuration {
+    kinesis_stream_arn = aws_kinesis_stream.pedidos.arn
+    role_arn           = local.lab_role_arn
+  }
+
+  extended_s3_configuration {
+    role_arn            = local.lab_role_arn
+    bucket_arn          = "arn:aws:s3:::${aws_s3_bucket.datalake.bucket}"
+    prefix              = "pedidos/"
+    error_output_prefix = "erros/"
+
+    # Buffer: entrega a cada 60s (Near Real Time) ou 64 MB, o que vier antes.
+    buffering_interval = 60
+    buffering_size     = 64
+
+    # Converte o JSON recebido em Parquet usando o schema da tabela Glue.
+    data_format_conversion_configuration {
+      input_format_configuration {
+        deserializer {
+          open_x_json_ser_de {}
+        }
+      }
+      output_format_configuration {
+        serializer {
+          parquet_ser_de {}
+        }
+      }
+      schema_configuration {
+        role_arn      = local.lab_role_arn
+        database_name = aws_glue_catalog_database.pedeja.name
+        table_name    = aws_glue_catalog_table.pedidos.name
+        region        = "us-east-1"
+      }
     }
   }
 }
@@ -114,23 +183,17 @@ resource "aws_lambda_function" "faturamento" {
 }
 
 # ---------------------------------------------------------------------------
-# Os DOIS consumidores leem o MESMO stream, de forma independente.
-# Cada event source mapping mantem seu proprio ponteiro de leitura (iterator).
+# Os DOIS consumidores leem o MESMO stream, de forma independente:
+#  - Consumidor A = Firehose (acima), que tem sua propria leitura do stream.
+#  - Consumidor B = Lambda faturamento, via event source mapping abaixo.
 # starting_position = TRIM_HORIZON: le desde o inicio do stream, entao todo
 # aluno processa os mesmos registros retidos (resultado deterministico).
 # ---------------------------------------------------------------------------
-resource "aws_lambda_event_source_mapping" "stream_to_datalake" {
-  event_source_arn  = aws_kinesis_stream.pedidos.arn
-  function_name     = aws_lambda_function.datalake.arn
-  starting_position = "TRIM_HORIZON"
-  batch_size        = 100
-}
-
 resource "aws_lambda_event_source_mapping" "stream_to_faturamento" {
   event_source_arn  = aws_kinesis_stream.pedidos.arn
   function_name     = aws_lambda_function.faturamento.arn
   starting_position = "TRIM_HORIZON"
-  batch_size        = 100
+  batch_size        = 500
 }
 
 # ---------------------------------------------------------------------------
@@ -177,28 +240,27 @@ resource "aws_cloudwatch_dashboard" "fase3" {
     widgets = [
       {
         type       = "text", x = 0, y = 0, width = 24, height = 2,
-        properties = { markdown = "# PedeJa - Fase 3 (Kinesis: 1 stream -> N consumidores)\nO **mesmo** stream alimenta o **data lake** e o **faturamento em tempo real**, de forma independente. O dado fica retido -> permite **replay**. Isso a fila SQS nao faz." }
+        properties = { markdown = "# PedeJa - Fase 3 (Kinesis: 1 stream -> N consumidores)\nO **mesmo** stream alimenta dois consumidores: o **Firehose** (converte em Parquet -> S3, lido pelo Athena) e a **Lambda de faturamento** (metrica em tempo real). O dado fica retido -> permite **replay**. Isso a fila SQS nao faz." }
       },
       {
         type = "metric", x = 0, y = 2, width = 12, height = 6,
         properties = {
-          title  = "Trafego - publicados vs consumidos (2 consumidores)",
+          title  = "Trafego - publicados (stream) vs entregue em Parquet (Firehose)",
           region = "us-east-1",
           metrics = [
-            ["PedeJa", "pedidos_publicados", "service", "pedeja-produtor-stream", { stat = "Sum", label = "publicados" }],
-            ["PedeJa", "pedidos_no_datalake", "service", "pedeja-datalake", { stat = "Sum", label = "data lake" }],
-            ["PedeJa", "pedidos_agregados", "service", "pedeja-faturamento", { stat = "Sum", label = "faturamento" }]
+            ["PedeJa", "pedidos_publicados", "service", "pedeja-produtor-stream", { stat = "Sum", label = "publicados (5000)" }],
+            ["AWS/Firehose", "DeliveryToS3.Records", "DeliveryStreamName", aws_kinesis_firehose_delivery_stream.datalake.name, { stat = "Sum", label = "entregue ao S3 (Parquet)" }]
           ]
         }
       },
       {
         type = "metric", x = 12, y = 2, width = 12, height = 6,
         properties = {
-          title  = "Latencia (iterator age) dos 2 consumidores - ms",
+          title  = "Firehose - idade do dado no buffer (s) e faturamento (Lambda)",
           region = "us-east-1",
           metrics = [
-            ["AWS/Lambda", "Duration", "FunctionName", aws_lambda_function.datalake.function_name, { stat = "Average", label = "data lake" }],
-            ["...", aws_lambda_function.faturamento.function_name, { stat = "Average", label = "faturamento" }]
+            ["AWS/Firehose", "DeliveryToS3.DataFreshness", "DeliveryStreamName", aws_kinesis_firehose_delivery_stream.datalake.name, { stat = "Maximum", label = "data freshness (s)" }],
+            ["AWS/Lambda", "Duration", "FunctionName", aws_lambda_function.faturamento.function_name, { stat = "Average", label = "faturamento (ms)" }]
           ]
         }
       },

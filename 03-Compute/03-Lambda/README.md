@@ -13,7 +13,7 @@ Todos os comandos `bash`/`terraform` deste lab rodam no **terminal do GitHub Cod
 > - [ ] `terraform -version` retorna >= 1.3.
 > - [ ] Nenhuma Lambda `pedeja-*` existe ainda (`aws lambda list-functions --query "Functions[?starts_with(FunctionName,'pedeja')].FunctionName" --output text` retorna vazio).
 >
-> **O que você vai fazer:** provisionar com Terraform uma pipeline de ingestão de dados orientada a eventos em **três fases** (Lambda+S3 → SQS → Kinesis), disparar o **mesmo conjunto de pedidos** em cada fase, e usar **observabilidade** (logs, métricas e trace) para **decidir** quando evoluir a arquitetura. **Tempo estimado: 50-60 minutos** (execução pura ~25 min + tempo para ler, observar dashboards e refletir).
+> **O que você vai fazer:** provisionar com Terraform uma pipeline de ingestão de dados orientada a eventos em **três fases** (Lambda+S3 → SQS → Kinesis+Firehose), disparar os pedidos em cada fase (10 nas fases 1-2; **5.000** na fase 3), terminar lendo o data lake em **Parquet via Athena**, e usar **observabilidade** (logs, métricas e trace) para **decidir** quando evoluir a arquitetura. **Tempo estimado: 60-75 minutos** (execução pura ~30 min + tempo para ler, observar dashboards e refletir).
 
 Neste laboratório você vive o dia a dia de um time de **engenharia de dados**: começa com uma ingestão simples que funciona, vê ela **quebrar sob pico**, e evolui a arquitetura **guiado por métricas** — não por achismo. Cada fase é um stack Terraform autossuficiente que você aplica, testa, observa e destrói antes de seguir.
 
@@ -22,6 +22,7 @@ Neste laboratório você vive o dia a dia de um time de **engenharia de dados**:
 - Por que Lambda é **orientada a eventos**: o API Gateway entrega um *evento* à função; ela não é um servidor escutando porta.
 - Quando uma ingestão síncrona (Lambda → S3) **não aguenta o pico** e por que desacoplar com **fila (SQS)** resolve.
 - Quando a fila **não basta** e o problema pede **streaming (Kinesis)**: vários consumidores lendo o mesmo dado + reprocessamento (replay).
+- Como entregar dados de streaming num data lake **analítico**: **Firehose** converte o stream em **Parquet** (Near Real Time) e o **Athena** consulta com SQL.
 - Como instrumentar Lambda com **AWS Lambda Powertools** (log estruturado, métricas EMF, trace X-Ray).
 - Como ler os **4 golden signals** (latência, tráfego, erros, saturação) e **métricas de negócio** para **justificar** uma evolução de arquitetura.
 
@@ -39,10 +40,10 @@ Três arquiteturas de ingestão funcionando e comparadas com dados reais, e a in
 | 1 | [O cenário: PedeJá](#parte-1---o-cenário-pedejá) | A história e o conjunto de dados fixo de pedidos. | [1](#passo-1) | ~5 min |
 | 2 | [Fase 1 — Ingestão direta (Lambda → S3)](#parte-2---fase-1-ingestão-direta) | API GW → Lambda → S3. Funciona, observe os golden signals e destrua. | [2](#passo-2) · [3](#passo-3) · [4](#passo-4) · [5](#passo-5) · [6](#passo-6) · [7](#passo-7) · [8](#passo-8) | ~15 min |
 | 3 | [Fase 2 — A Black Friday (SQS)](#parte-3---fase-2-a-black-friday) | O pico quebra a v1. Desacople com fila + DLQ e destrua. | [9](#passo-9) · [10](#passo-10) · [11](#passo-11) · [12](#passo-12) · [13](#passo-13) · [14](#passo-14) | ~15 min |
-| 4 | [Fase 3 — Três times, um dado (Kinesis)](#parte-4---fase-3-três-times-um-dado) | A fila não distribui nem reprocessa. Evolua para streaming e destrua. | [15](#passo-15) · [16](#passo-16) · [17](#passo-17) · [18](#passo-18) · [19](#passo-19) · [20](#passo-20) | ~15 min |
-| 5 | [Conclusão e decisão](#parte-5---conclusão-e-decisão) | Tabela comparativa e o documento de decisão. | [21](#passo-21) | ~5 min |
+| 4 | [Fase 3 — Três times, um dado (Kinesis + Firehose + Athena)](#parte-4---fase-3-três-times-um-dado) | 5.000 pedidos. Firehose → Parquet → Athena, e faturamento em tempo real. Depois destrua. | [15](#passo-15) · [16](#passo-16) · [17](#passo-17) · [18](#passo-18) · [19](#passo-19) · [20](#passo-20) · [21](#passo-21) | ~20 min |
+| 5 | [Conclusão e decisão](#parte-5---conclusão-e-decisão) | Tabela comparativa e o documento de decisão. | [22](#passo-22) | ~5 min |
 
-> Os passos 3, 10 e 16 têm sub-passos (3.1/3.2 etc.) — clique no número para ir à parte. Os passos 8, 14 e 20 são o `terraform destroy` de cada fase: **não pule**.
+> Os passos 3, 10 e 16 têm sub-passos (3.1/3.2 etc.) — clique no número para ir à parte. Os passos 8, 14 e 21 são o `terraform destroy` de cada fase: **não pule**.
 
 > Se travou em algum passo, clique no número no mapa acima para ir direto a ele.
 
@@ -427,21 +428,17 @@ aws s3 ls s3://$BUCKET/pedidos/dt=2026-03-15/ | wc -l
 
 Saída esperada: `10`. A fila esvaziou e os 10 pedidos chegaram ao data lake — agora de forma assíncrona.
 
-<!-- PRINT SUGERIDO: img/f2-s3.png
-     Saida do aws s3 ls com os 10 arquivos, provando que a consumidora gravou via fila. -->
 ![](img/f2-s3.png)
 
 <a id="passo-13"></a>
 **13.** Pegue o link do dashboard `PedeJa-Fase2-Fila` e abra no navegador:
 
 ```bash
-terraform -chdir=/workspaces/fiap-cloud-engineering/03-Compute/03-Lambda/fase-2-fila output -raw dashboard_url
+terraform -chdir=/workspaces/fiap-cloud-engineering/03-Compute/03-Lambda/fase-2-fila output -raw dashboard_url && echo
 ```
 
 Abra a URL impressa — ou vá direto pelo link **[CloudWatch → Dashboards → PedeJa-Fase2-Fila](https://us-east-1.console.aws.amazon.com/cloudwatch/home?region=us-east-1#dashboards/dashboard/PedeJa-Fase2-Fila)**. Compare com o da Fase 1: agora você vê a **profundidade da fila** subir e zerar, a **latência do produtor vs consumidor** (o produtor é muito mais rápido) e a **DLQ** (vazia, porque nada falhou).
 
-<!-- PRINT SUGERIDO: img/f2-dashboard.png
-     Dashboard PedeJa-Fase2-Fila: backlog da fila, latencia produtor vs consumidor, DLQ zerada, enfileirados vs processados. -->
 ![](img/f2-dashboard.png)
 
 <a id="passo-14"></a>
@@ -453,7 +450,7 @@ terraform destroy -auto-approve
 ```
 
 > [!IMPORTANT]
-> Não pule este passo. Deixar SQS, DLQ e Lambdas de pé acumula recursos e custo na sua conta da AWS Academy.
+> Não pule este passo. Deixar SQS, DLQ e Lambdas de pé acumula recursos e custo na sua conta da AWS Academy <b>caso utilizados</b>.
 
 ### Checkpoint
 
@@ -477,11 +474,16 @@ terraform destroy -auto-approve
 > quando uma mensagem é lida, ela some — um consumidor só. E não dá pra "reler" o passado.
 > Esse é o ponto em que a fila vira streaming. **Vamos para o Kinesis.**
 
+Agora o volume também é real: você vai publicar **5.000 pedidos** (não mais 10) — é o que faz a diferença entre fila e streaming aparecer de verdade.
+
 ### Resultado esperado desta parte
 
-Pipeline `API Gateway → Lambda produtora → Kinesis → 2 consumidores independentes`: um grava no data lake (S3), outro agrega faturamento em tempo real. Os dois leem o **mesmo** stream sem disputar o dado.
+Pipeline `API Gateway → Lambda produtora → Kinesis → 2 consumidores independentes`, lendo o **mesmo** stream sem disputar o dado:
 
-![Arquitetura da Fase 3: um Kinesis stream alimenta dois consumidores independentes — um grava no S3, outro agrega faturamento no CloudWatch](diagramas/fase-3.png)
+- **Consumidor A — Kinesis Firehose**: acumula um micro-lote (60s), converte para **Parquet** e grava no S3. Você consulta com **Athena** em SQL, Near Real Time (≤ 1 min após publicar).
+- **Consumidor B — Lambda de faturamento**: agrega o faturamento por cidade em tempo real (métrica no CloudWatch).
+
+![Arquitetura da Fase 3: um Kinesis stream alimenta dois consumidores independentes — o Firehose converte em Parquet no S3 (lido pelo Athena) e a Lambda agrega faturamento no CloudWatch](diagramas/fase-3.png)
 
 > Diagrama editável (Excalidraw): [`diagramas/fase-3.excalidraw`](diagramas/fase-3.excalidraw) — abra em [excalidraw.com](https://excalidraw.com).
 
@@ -498,7 +500,7 @@ terraform init \
 ```
 
 <a id="passo-16"></a>
-**16.1.** Aplique. Agora são 3 Lambdas (1 produtora + 2 consumidoras) e o Kinesis Data Stream:
+**16.1.** Aplique. Agora são 2 Lambdas (produtora + faturamento), o Kinesis Data Stream, o **Firehose** (Consumidor A), uma tabela no **Glue Data Catalog** e o data lake — 14 recursos no total:
 
 ```bash
 terraform apply -auto-approve
@@ -514,7 +516,7 @@ echo "BUCKET.: $BUCKET"
 ```
 
 > [!NOTE]
-> Os consumidores do Kinesis usam `starting_position = TRIM_HORIZON` (leem desde o início do stream). Após o apply, eles levam **~30-60 segundos** para "armar" antes de começar a processar. Por isso o passo 17 publica e o passo 18 espera.
+> A Lambda de faturamento usa `starting_position = TRIM_HORIZON` (lê desde o início do stream) e leva ~30-60s para "armar". O **Firehose** entrega no S3 a cada **60 segundos** (buffer). Por isso, depois de publicar (passo 17), você espera ~1 min antes de consultar no Athena (passo 19).
 
 <details>
 <summary><b>💡 Clique para entender — por que Kinesis e não outra fila</b></summary>
@@ -535,55 +537,105 @@ Cada consumidor tem seu **próprio ponteiro de leitura** (iterator) no stream. O
 </blockquote>
 </details>
 
+<details>
+<summary><b>💡 Clique para entender — por que Firehose + Parquet (e não uma Lambda gravando arquivo por pedido)</b></summary>
+<blockquote>
+
+Na Fase 1 cada pedido virou um arquivo JSON no S3. Com 5.000 pedidos isso seriam 5.000 arquivos minúsculos — o clássico **problema de "small files"**, que deixa qualquer query lenta e cara.
+
+O **Kinesis Data Firehose** resolve isso: ele lê o stream, **acumula um micro-lote** (aqui: a cada 60s ou 64 MB, o que vier primeiro) e grava **um** arquivo já em **Parquet** — formato colunar, comprimido, feito para análise. A conversão usa o schema da tabela no **Glue Data Catalog**, e é essa mesma tabela que o **Athena** consulta. Resultado: poucos arquivos grandes, leitura barata, SQL em segundos. É o padrão moderno de ingestão de data lake (*Near Real Time*), sem você gerenciar servidor nenhum.
+
+</blockquote>
+</details>
+
 <a id="passo-17"></a>
-**17.** Publique os mesmos 10 pedidos no stream, usando a variável `$API` do passo 16.2:
+**17.** Publique **5.000 pedidos** no stream, usando a variável `$API` do passo 16.2. O script cicla os 10 pedidos fixos (500 vezes) com IDs únicos `PED-0001..PED-5000` — então o faturamento por cidade é exatamente **500× o da Parte 1** (determinístico):
 
 ```bash
 cd /workspaces/fiap-cloud-engineering/03-Compute/03-Lambda
-for p in $(seq 0 9); do
-  pedido=$(python3 -c "import json;print(json.dumps(json.load(open('dados/pedidos.json'))[$p]))")
-  curl -s -X POST "$API/pedidos" -H "Content-Type: application/json" -d "$pedido"
-  echo ""
-done
+python3 dados/publicar_5000.py "$API"
 ```
 
-Saída esperada: 10 linhas como `{"status": "publicado", "pedido_id": "PED-0001"}`.
+Saída esperada (leva ~45-60s): `5000/5000 pedidos publicados em Ns`.
+
+<details>
+<summary><b>⚠ Se der erro: alguns pedidos falharam (ex.: <code>4998/5000</code>)</b></summary>
+<blockquote>
+Throttling pontual da API sob carga. Rode o comando de novo — os IDs são os mesmos (`PED-0001..PED-5000`), então republicar não duplica no resultado final por `pedido_id`, e o Firehose simplesmente recebe os que faltaram.
+</blockquote>
+</details>
 
 <a id="passo-18"></a>
-**18.** Aguarde o polling dos consumidores e valide os **dois** caminhos a partir do **mesmo** stream (usa `$BUCKET` do passo 16.2):
+**18.** Valide o **Consumidor B (Lambda de faturamento)** — ele agrega as 4 cidades em tempo real, lendo o mesmo stream:
 
 ```bash
-sleep 45
-echo "Consumidor 1 (data lake) - objetos no S3:"
-aws s3 ls s3://$BUCKET/pedidos/dt=2026-03-15/ | wc -l
-echo "Consumidor 2 (faturamento) - cidades agregadas:"
+sleep 30
 aws logs filter-log-events --log-group-name "/aws/lambda/pedeja-faturamento" \
-  --start-time $(python3 -c "import time;print(int((time.time()-120)*1000))") \
+  --start-time $(python3 -c "import time;print(int((time.time()-300)*1000))") \
   --filter-pattern '"faturamento agregado"' --query "events[].message" --output text \
   | grep -o '"cidade":"[^"]*"' | sort -u
 ```
 
-Saída esperada: `10` objetos no S3 **e** as 4 cidades (Belo Horizonte, Curitiba, Rio de Janeiro, Sao Paulo) agregadas pelo segundo consumidor. **O mesmo dado alimentou dois destinos diferentes** — é isso que a fila não fazia.
-
-<!-- PRINT SUGERIDO: img/f3-dois-consumidores.png
-     Terminal mostrando "10" objetos no S3 e as 4 cidades agregadas, provando os 2 consumidores independentes do mesmo stream. -->
-![](img/f3-dois-consumidores.png)
+Saída esperada: as 4 cidades — `Belo Horizonte`, `Curitiba`, `Rio de Janeiro`, `Sao Paulo`.
 
 <a id="passo-19"></a>
-**19.** Pegue o link do dashboard `PedeJa-Fase3-Streaming` e abra no navegador:
+**19.** Valide o **Consumidor A (Firehose → Parquet → Athena)**. Espere o buffer do Firehose fechar (~60s) e consulte com SQL. Este é o **go/no-go** da fase — o número tem que bater com a Parte 1 × 500:
+
+```bash
+sleep 60
+aws athena start-query-execution \
+  --query-string "SELECT cidade, COUNT(*) AS pedidos, ROUND(SUM(valor),2) AS faturamento FROM pedeja.pedidos GROUP BY cidade ORDER BY faturamento DESC" \
+  --query-execution-context Database=pedeja \
+  --result-configuration "OutputLocation=s3://$BUCKET/athena-results/" \
+  --query "QueryExecutionId" --output text
+```
+
+Esse comando devolve um **ID de execução**. Pegue o resultado (troque `<ID>` pelo valor impresso):
+
+```bash
+aws athena get-query-results --query-execution-id <ID> \
+  --query "ResultSet.Rows[].Data[].VarCharValue" --output text
+```
+
+Saída esperada (o faturamento é 500× o da Parte 1):
+
+| Cidade | Pedidos | Faturamento |
+|--------|---------|-------------|
+| São Paulo | 2000 | 117650.0 |
+| Rio de Janeiro | 1000 | 99200.0 |
+| Curitiba | 1000 | 45000.0 |
+| Belo Horizonte | 1000 | 36500.0 |
+| **Total** | **5000** | **298350.0** |
+
+<!-- PRINT SUGERIDO: img/f3-athena.png
+     Resultado da query no Athena: 4 cidades com 5000 pedidos no total e faturamento 500x. Pode ser no console do Athena (mais visual) ou no terminal. -->
+![](img/f3-athena.png)
+
+> [!TIP]
+> Prefere o console? Abra o **[Athena Query Editor](https://us-east-1.console.aws.amazon.com/athena/home?region=us-east-1#/query-editor)**, selecione o database `pedeja` e rode a mesma query. Na primeira vez o Athena pede para configurar um local de resultados — use `s3://<seu-bucket>/athena-results/`.
+
+<details>
+<summary><b>⚠ Se der erro: <code>0 pedidos</code> ou tabela vazia no Athena</b></summary>
+<blockquote>
+O Firehose ainda não fechou o buffer (60s). Espere mais ~30s e rode a query de novo. Confirme que já há Parquet no S3 com: `aws s3 ls s3://$BUCKET/pedidos/ --recursive | grep -c parquet` (tem que ser ≥ 1).
+</blockquote>
+</details>
+
+<a id="passo-20"></a>
+**20.** Pegue o link do dashboard `PedeJa-Fase3-Streaming` e abra no navegador:
 
 ```bash
 terraform -chdir=/workspaces/fiap-cloud-engineering/03-Compute/03-Lambda/fase-3-streaming output -raw dashboard_url
 ```
 
-Abra a URL impressa — ou vá direto pelo link **[CloudWatch → Dashboards → PedeJa-Fase3-Streaming](https://us-east-1.console.aws.amazon.com/cloudwatch/home?region=us-east-1#dashboards/dashboard/PedeJa-Fase3-Streaming)**. O gráfico **publicados vs data lake vs faturamento** mostra os três números iguais (10): um produtor, dois consumidores, todos vendo o mesmo stream. O faturamento por cidade bate com a tabela da Parte 1.
+Abra a URL impressa — ou vá direto pelo link **[CloudWatch → Dashboards → PedeJa-Fase3-Streaming](https://us-east-1.console.aws.amazon.com/cloudwatch/home?region=us-east-1#dashboards/dashboard/PedeJa-Fase3-Streaming)**. Você vê **publicados (5000) vs entregue ao S3 em Parquet (Firehose)** convergindo, e o **data freshness** do Firehose (quantos segundos o dado levou para chegar ao S3 — perto de 60s).
 
 <!-- PRINT SUGERIDO: img/f3-dashboard.png
-     Dashboard PedeJa-Fase3-Streaming: trafego publicados vs 2 consumidores, e faturamento em tempo real por cidade. -->
+     Dashboard PedeJa-Fase3-Streaming: publicados vs entregue em Parquet, data freshness do Firehose e faturamento por cidade. -->
 ![](img/f3-dashboard.png)
 
-<a id="passo-20"></a>
-**20.** Destrua a Fase 3:
+<a id="passo-21"></a>
+**21.** Destrua a Fase 3:
 
 ```bash
 cd /workspaces/fiap-cloud-engineering/03-Compute/03-Lambda/fase-3-streaming
@@ -591,14 +643,14 @@ terraform destroy -auto-approve
 ```
 
 > [!CAUTION]
-> **Esse passo não é opcional.** Kinesis on-demand e Lambdas geram custo enquanto vivos — se você sair sem destruir, segue consumindo o orçamento da sua conta da AWS Academy.
+> **Esse passo não é opcional.** Kinesis on-demand, Firehose e Lambdas geram custo enquanto vivos — se você sair sem destruir, segue consumindo o orçamento da sua conta da AWS Academy.
 
 ### Checkpoint
 
-- [x] `terraform apply` criou o Kinesis + 3 Lambdas.
-- [x] Os 10 pedidos foram publicados no stream.
-- [x] O data lake (consumidor 1) recebeu 10 objetos.
-- [x] O faturamento (consumidor 2) agregou as 4 cidades — do mesmo stream.
+- [x] `terraform apply` criou Kinesis + Firehose + Glue + 2 Lambdas.
+- [x] Os 5.000 pedidos foram publicados no stream.
+- [x] Consumidor A: o Athena lê o Parquet e o faturamento bate (R$ 298.350,00 em 5000 pedidos).
+- [x] Consumidor B: a Lambda agregou as 4 cidades — do mesmo stream.
 - [x] Você destruiu a Fase 3.
 
 ---
@@ -607,17 +659,17 @@ terraform destroy -auto-approve
 
 Você resolveu o **mesmo** problema de negócio três vezes, e cada arquitetura respondeu bem a uma pergunta diferente:
 
-| | Fase 1 — Lambda → S3 | Fase 2 — SQS | Fase 3 — Kinesis |
+| | Fase 1 — Lambda → S3 | Fase 2 — SQS | Fase 3 — Kinesis + Firehose |
 |---|---|---|---|
-| **Problema que resolve** | ingestão simples | absorver pico sem perder dado | distribuir o mesmo dado + replay |
-| **Responde bem** | volume baixo e estável | rajada/Black Friday | vários consumidores, reprocessamento |
+| **Problema que resolve** | ingestão simples | absorver pico sem perder dado | distribuir o mesmo dado + replay + análise |
+| **Responde bem** | volume baixo e estável | rajada/Black Friday | vários consumidores; 5.000+ em Parquet, SQL no Athena |
 | **Responde mal** | satura no pico (síncrono) | 1 consumidor, sem replay | excesso para volume baixo |
-| **Acontece na vida real quando** | MVP, protótipo | e-commerce com sazonalidade | dado consumido por BI + ML + fraude |
+| **Acontece na vida real quando** | MVP, protótipo | e-commerce com sazonalidade | dado consumido por BI (Athena) + ML + fraude |
 
 A lição central de engenharia de dados: **não existe arquitetura "certa" no vácuo**. A Fase 1 não é "errada" — ela é a escolha certa enquanto o volume é baixo. O que mudou foi o *problema*, e os **dados de observabilidade** (latência subindo, saturação, depois a necessidade de múltiplos consumidores) é que justificaram cada evolução. Você não adivinhou: mediu.
 
-<a id="passo-21"></a>
-**21.** Escreva sua decisão. Crie um arquivo `DECISION.md` na pasta do lab respondendo, em poucas linhas, como se fosse para a Marina:
+<a id="passo-22"></a>
+**22.** Escreva sua decisão. Crie um arquivo `DECISION.md` na pasta do lab respondendo, em poucas linhas, como se fosse para a Marina:
 
 ```bash
 code /workspaces/fiap-cloud-engineering/03-Compute/03-Lambda/DECISION.md
@@ -669,6 +721,11 @@ Você construiu, do zero e com Terraform, três pipelines serverless de ingestã
 | SQS | Fila gerenciada; desacopla produtor e consumidor; cada mensagem é lida por 1 consumidor e some. |
 | DLQ | Dead-letter queue: fila para mensagens que falharam N vezes, para inspeção sem perda. |
 | Kinesis Data Stream | Streaming: dado fica retido, lido por N consumidores independentes, permite replay. |
+| Kinesis Data Firehose | Entrega gerenciada de streaming: acumula micro-lote e grava no S3, convertendo para Parquet. |
+| Parquet | Formato de arquivo colunar e comprimido, padrão para análise (lê só as colunas que a query precisa). |
+| Glue Data Catalog | Catálogo de metadados (databases/tabelas) que descreve o schema dos dados no S3. |
+| Athena | Consulta SQL serverless sobre arquivos no S3 (usa o schema do Glue); paga por dado escaneado. |
+| Near Real Time | Dado disponível para consulta poucos segundos/minutos após gerado (aqui: ~60s via Firehose). |
 | Shard | Unidade de paralelismo/ordenação do Kinesis; a partition key define o shard. |
 | TRIM_HORIZON | Posição de leitura que começa no início do stream (processa todo o retido). |
 | Event source mapping | Liga uma fonte (SQS/Kinesis) a uma Lambda, fazendo o polling e a invocação em lote. |

@@ -369,28 +369,35 @@ def fase2():
 
 def fase3():
     d = Diagrama()
-    d.titulo("Fase 3 - Kinesis: 1 stream, N consumidores (app PedeJá)", 60, 36)
-    d.nota("Três times querem o MESMO dado. O Kinesis retém o stream e permite vários consumidores independentes + replay.",
-           60, 72, w=1300)
-    # L11: abertura moderada (meio ROW_PITCH) para nao criar vazio central
-    y = 300
-    dy = int(ROW_PITCH * 0.8)
+    d.titulo("Fase 3 - Kinesis + Firehose: 5.000 pedidos, 2 consumidores (app PedeJá)", 60, 36)
+    d.nota("Três times querem o MESMO dado. O Kinesis retém o stream; o Firehose entrega Parquet (lido pelo Athena) e a Lambda agrega em tempo real.",
+           60, 72, w=1500)
+    # Ramo A (cima): Firehose -> S3 Parquet -> Athena (3 nos).
+    # Ramo B (baixo): Lambda faturamento -> CloudWatch (2 nos).
+    y = 320
+    dy = int(ROW_PITCH * 0.85)
     x0 = 170
     api = d.no("apigateway", "API Gateway", x0, y)
     prod = d.no("lambda", "Lambda PRODUTORA\n(publica no stream)", x0 + COL_PITCH, y)
     kin = d.no("kinesis", "Kinesis\nstream (dado retido)", x0 + 2 * COL_PITCH, y)
-    c1 = d.no("lambda", "Lambda CONSUMIDORA A\n(data lake)", x0 + 3 * COL_PITCH, y - dy)
-    c2 = d.no("lambda", "Lambda CONSUMIDORA B\n(faturamento)", x0 + 3 * COL_PITCH, y + dy)
-    s3 = d.no("s3", "S3\ndata lake", x0 + 4 * COL_PITCH, y - dy)
+    # Ramo A — consumidor A
+    fh = d.no("firehose", "CONSUMIDOR A\nKinesis Data Firehose", x0 + 3 * COL_PITCH, y - dy)
+    s3 = d.no("s3", "S3\nParquet", x0 + 4 * COL_PITCH, y - dy)
+    ath = d.no("athena", "Athena\n(SQL)", x0 + 5 * COL_PITCH, y - dy)
+    # Ramo B — consumidor B
+    fat = d.no("lambda", "CONSUMIDOR B\nLambda faturamento", x0 + 3 * COL_PITCH, y + dy)
     cw = d.no("cloudwatch", "CloudWatch\nmétrica por cidade", x0 + 4 * COL_PITCH, y + dy)
     d.seta(api, prod, "invoca (evento)")
-    d.seta(prod, kin, "publica")
+    d.seta(prod, kin, "publica 5.000")
     # L11: fan-out de UM ponto (borda direita do Kinesis) com rotulo unico
-    d.fan_out(kin, [c1, c2], "ambos leem o mesmo dado")
-    d.seta(c1, s3, "grava JSON")
-    d.seta(c2, cw, "agrega")
-    d.nota("O mesmo stream alimenta DOIS consumidores independentes; o dado fica retido, o que permite reprocessar (replay).",
-           60, y + dy + 120, w=1300)
+    d.fan_out(kin, [fh, fat], "ambos leem o mesmo dado")
+    d.seta(fh, s3, "converte Parquet")
+    d.seta(s3, ath, "consulta")
+    d.seta(fat, cw, "agrega")
+    d.nota("Consumidor A: Firehose acumula micro-lote (60s) -> Parquet no S3 -> Athena consulta em SQL (Near Real Time).",
+           60, y + dy + 130, w=1500)
+    d.nota("Consumidor B: Lambda agrega faturamento por cidade em tempo real. O dado retido no stream permite reprocessar (replay).",
+           60, y + dy + 160, w=1500)
     d.salvar(os.path.join(DIR, "fase-3.excalidraw"))
 
 
